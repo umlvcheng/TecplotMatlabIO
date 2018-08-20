@@ -1,0 +1,9 @@
+N=5;
+[X,Y]=meshgrid(1:N,1:N);
+A=X+Y;
+S=X-Y;
+D=[A, S]; %3Dim array
+output_file_name='test.plt';
+title='';
+matrixToTecplotBinaryFile(X,Y,D,output_file_name,title,varnames);
+system('tec360 test.plt');

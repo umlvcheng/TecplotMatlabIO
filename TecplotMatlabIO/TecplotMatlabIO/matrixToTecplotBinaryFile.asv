@@ -1,0 +1,283 @@
+function [] = matrixToTecplotBinaryFile(X,Y,contour,output_file_name,title, varnames)
+% Write matlab  matrix into tecplot binary file  *.plt
+% plt -> matlab?
+% adapted from URL :
+% http://tecplottalk.com/viewtopic.php?t=879&sid=2775b1aff4a1dc523ee890b85ab08f40
+% This function takes two dimensional ordered data and creates a tecplot 
+% output_file_name
+% X,Y are x-y coordinates 2D matrix as output from the meshgrid function 
+% such that  surf(X,Y,contour) will produce a plot using matlab functions
+% contour can be 3D matrix, with dim(3)==var_number except x and y
+% 
+% title is string for variable
+% varnames is cell of string, for single var it still should be {'var'} or 'var'
+
+% Comments following match as closely as possible those tecplot binary data format
+% HEADER SECTION ->DATA ZONE 
+% refer to TECIO lib for cross platform vompability:  
+% 32bit/ 64bit Linux/ and Windows
+% FOPEN(FILENAME,PERMISSION,MACHINEFORMAT)  : MACHINEFORMAT:  endianess
+
+%test driving development
+%N=5
+%[X,Y]=meshgrid(1:N,1:N);
+%D=ones(N);
+%output_file_name='test.plt'
+%matrixToTecplotBinaryFile(X,Y,D,output_file_name);
+%system('tec360 test.plt');
+
+% %test 
+
+
+if nargin <4
+    error('please specify at least X,Y,contour,file_name ');
+end
+
+if nargin ==4
+    title='test output';
+    varnames={'var'};
+end
+%--------
+x_name = 'x';
+y_name = 'y';
+if ischar(varnames)
+    matvarlist = {varnames};
+else
+    matvarlist = varnames;
+end
+
+
+%---------
+MultipleVarEnable=false;
+dim=size(contour);
+var_data_cell={};
+
+if length(dim)==2
+    var_count=2+1;
+    var_data_cell={X,Y,contour};
+else if length(dim)==3
+      var_count=2+dim(3); 
+      MultipleVarEnable=true;
+      % built the var data cell array to simplify store
+      var_data_cell={X,Y};
+      for di=3:var_count
+            var_data_cell{di}=contour(:,:,di-2);
+      end
+     % msgbox('write multiple var is not implmented'); return;
+    end
+end
+
+assert( size(var_data_cell{1}) == size(var_data_cell{3}));
+
+%
+PrecisoinByCountOfInt32=2;   % float64
+MatrixVarFloatTypeStr ='float64';
+
+
+%-----------------------------------
+fid_out = fopen(output_file_name,'w');  %should  be 'wb'
+if fid_out <0
+    disp('Fail to open the file to write, check permission and path format \n');
+end
+
+
+% ---------i. magic number ???--
+magic_number = '#!TDV112';
+char_hold = char(magic_number);
+l_max = max(size(char_hold));
+for ii =1:1:l_max
+    fwrite(fid_out,char_hold(ii),'char');
+end
+
+%------- ii. Integer value of 1.
+dummy_int32 = 1;
+fwrite(fid_out,dummy_int32,'int32');
+% iii. Title and variable names.
+% filetype
+dummy_int32 = 0;   % end of object
+fwrite(fid_out,dummy_int32,'int32');
+
+
+%-------iii write title and terminate with a null char
+plt_write_string(fid_out, title);
+
+% Number of variables
+dummy_int32 = var_count;
+fwrite(fid_out,dummy_int32,'int32');
+%variable names just give 3 names
+
+plt_write_string(fid_out, x_name);
+plt_write_string(fid_out, y_name);
+% additional var name list
+for i=1:length(matvarlist)
+    plt_write_string(fid_out, varlist{i});
+end
+
+% ---------iv. Zones
+% write zone marker float32 = 299.0
+dummy_float32 = single(299.0);
+fwrite(fid_out,dummy_float32,'float32');
+
+% write zone name 'data zone' and nul
+zone_name = 'Data zone';
+plt_write_string(fid_out, zone_name);
+
+
+% parent zone = 0 (no parent zone) int32
+dummy_int32 = -1;
+fwrite(fid_out,dummy_int32,'int32');
+
+% strand ID suggested as zero from old calls
+dummy_int32 = 0;
+fwrite(fid_out,dummy_int32,'int32');
+
+% solution_time
+solution_time = pi;
+fwrite(fid_out,solution_time,'float64');
+
+% not used set to -1 (int32)
+dummy_int32 = -1;
+fwrite(fid_out,dummy_int32,'int32');
+
+% zone_type (ordered = 0)
+%
+zone_type = 0;
+fwrite(fid_out,zone_type,'int32');
+
+% var_location (0 = all data at nodal points)
+% 
+var_location = 0;
+fwrite(fid_out,var_location,'int32');
+
+% are raw local 1-to-1 face neighbors supplied (must be false for ordered)
+% flase = 0 (int32)
+dummy_int32 = 0;
+fwrite(fid_out,dummy_int32,'int32');
+
+% No. of miscellaneous user defined face neighbor connections
+NoOfUserDefinedNeighbourConn = 0;
+fwrite(fid_out,NoOfUserDefinedNeighbourConn,'int32');
+
+% ordered zone var 3 int32s for num points i -j -k
+[Imax,Jmax] =size(X);
+Kmax = 1;   
+fwrite(fid_out,Imax,'int32');
+fwrite(fid_out,Jmax,'int32');
+fwrite(fid_out,Kmax,'int32');
+
+% No auxilary data pairs
+dummy_int32 = 0;
+fwrite(fid_out,dummy_int32,'int32');
+
+%--------------------- v. Geometries ???
+% looks like we can get away without it
+
+EOH_MARKER=single(357.0);
+fwrite(fid_out, EOH_MARKER ,'float32')
+
+%--------------------------------------------------
+% II. DATA SECTION
+% i for both ordered and fe
+% zone marker = 299.0
+dummy_float32 = single(299.0);
+fwrite(fid_out,dummy_float32,'float32');
+
+% specify data format for plt file 64 bit floats for each var int32 = 2 per
+for i=1:var_count
+fwrite(fid_out,PrecisoinByCountOfInt32,'int32');
+end
+
+
+% no passive variables
+dummy_int32 = 0;
+fwrite(fid_out,dummy_int32,'int32');
+
+% no variable sharing
+dummy_int32 = 0;
+fwrite(fid_out,dummy_int32,'int32');
+
+% zone number to share connectivity with
+dummy_int32 = -1;
+fwrite(fid_out,dummy_int32,'int32');
+
+
+
+
+%--------------% data----------
+% write data in the right order
+% reshape matrices
+X = reshape(X,1,(Imax*Jmax));
+Y = reshape(Y,1,(Imax*Jmax));
+
+if MultipleVarEnable==false
+    contour = reshape(contour,1,(Imax*Jmax));
+else
+    %
+end
+
+% min_X = min(X);
+% max_X = max(X);
+% min_Y = min(Y);
+% max_Y = max(Y);
+% % write min/max
+% fwrite(fid_out,min_X,MatrixVarFloatTypeStr);
+% fwrite(fid_out,max_X,MatrixVarFloatTypeStr);
+% fwrite(fid_out,min_Y,MatrixVarFloatTypeStr);
+% fwrite(fid_out,max_Y,MatrixVarFloatTypeStr);
+%
+% get data minima and maxima after reshape to call min max once per set
+for di=1:var_count
+    C=var_vector_cell{di};
+    min_C = min(C);  % for reshaped 1D vecter
+    max_C = max(C);
+    fwrite(fid_out,min_C,MatrixVarFloatTypeStr);
+    fwrite(fid_out,max_C,MatrixVarFloatTypeStr);
+end
+% write data
+% fwrite(fid_out,X,MatrixVarFloatTypeStr);
+% fwrite(fid_out,Y,MatrixVarFloatTypeStr);
+%
+for di=1:var_count
+   fwrite(fid_out,var_vector_cell{di},MatrixVarFloatTypeStr);
+end
+
+% ii. specific to ordered
+    % null as misc user def connections = 0
+
+% iii. specific to Finite element format, therefore not generated
+
+% ------------end of file
+fclose(fid_out);
+
+return 
+
+
+
+%======================================
+
+function l= plt_write_string(fid_out,string)
+% return the size_t of int32
+char_hold = int32(string);
+l_max = max(size(char_hold));
+for ii =1:1:l_max
+    fwrite(fid_out,char_hold(ii),'int32');
+end
+dummy_int32 =0;
+fwrite(fid_out,dummy_int32,'int32');
+l=l_max+1;
+
+function l= plt_write_numeric(fid_out,numeric1Dvector, numeric_type_str)
+% for one dim vector only , dummy nul int32 is not appened
+l_max = length(numeric1Dvector);
+fwrite(fid_out,numeric1Dvector, numeric_type_str);
+
+% for ii =1:1:l_max
+%     fwrite(fid_out,numeric1Dvector(ii), numeric_type_str);
+% end
+l=l_max+1;
+
+function l= plt_write_dummy(fid_out)
+% mean empty
+dummy_int32 =0;
+fwrite(fid_out,dummy_int32,'int32');
+l=1;
